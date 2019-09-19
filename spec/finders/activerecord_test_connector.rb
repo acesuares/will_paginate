@@ -1,15 +1,28 @@
 require 'active_record'
 require 'active_record/fixtures'
 require 'active_support/multibyte' # needed for Ruby 1.9.1
+require 'stringio'
+require 'erb'
+
+# https://travis-ci.org/mislav/will_paginate/jobs/99999001
+require 'active_support/core_ext/string/conversions'
+class String
+  alias to_datetime_without_patch to_datetime
+  def to_datetime
+    to_datetime_without_patch
+  rescue ArgumentError
+    return nil
+  end
+end
 
 $query_count = 0
 $query_sql = []
 
 ignore_sql = /
     ^(
-      PRAGMA | SHOW\ max_identifier_length |
+      PRAGMA | SHOW\ (max_identifier_length|search_path) |
       SELECT\ (currval|CAST|@@IDENTITY|@@ROWCOUNT) |
-      SHOW\ (FIELDS|TABLES)
+      SHOW\ ((FULL\ )?FIELDS|TABLES)
     )\b |
     \bFROM\ (sqlite_master|pg_tables|pg_attribute)\b
   /x
@@ -25,27 +38,24 @@ end
 module ActiverecordTestConnector
   extend self
   
-  attr_accessor :able_to_connect
   attr_accessor :connected
 
   FIXTURES_PATH = File.expand_path('../../fixtures', __FILE__)
 
-  Fixtures = defined?(ActiveRecord::Fixtures) ? ActiveRecord::Fixtures : ::Fixtures
+  Fixtures = defined?(ActiveRecord::FixtureSet) ? ActiveRecord::FixtureSet :
+             defined?(ActiveRecord::Fixtures) ? ActiveRecord::Fixtures :
+             ::Fixtures
 
   # Set our defaults
   self.connected = false
-  self.able_to_connect = true
 
   def setup
-    unless self.connected || !self.able_to_connect
+    unless self.connected
       setup_connection
       load_schema
       add_load_path FIXTURES_PATH
       self.connected = true
     end
-  rescue Exception => e  # errors from ActiveRecord setup
-    $stderr.puts "\nSkipping ActiveRecord tests: #{e}\n\n"
-    self.able_to_connect = false
   end
 
   private
@@ -57,8 +67,9 @@ module ActiverecordTestConnector
 
   def setup_connection
     db = ENV['DB'].blank?? 'sqlite3' : ENV['DB']
-    
-    configurations = YAML.load_file(File.expand_path('../../database.yml', __FILE__))
+
+    erb = ERB.new(File.read(File.expand_path('../../database.yml', __FILE__)))
+    configurations = YAML.load(erb.result)
     raise "no configuration for '#{db}'" unless configurations.key? db
     configuration = configurations[db]
     
@@ -66,17 +77,33 @@ module ActiverecordTestConnector
     puts "using #{configuration['adapter']} adapter"
     
     ActiveRecord::Base.configurations = { db => configuration }
-    ActiveRecord::Base.establish_connection(db)
+    ActiveRecord::Base.establish_connection(db.to_sym)
     ActiveRecord::Base.default_timezone = :utc
+
+    case configuration['adapter']
+    when 'mysql'
+      fix_primary_key(ActiveRecord::ConnectionAdapters::MysqlAdapter)
+    when 'mysql2'
+      fix_primary_key(ActiveRecord::ConnectionAdapters::Mysql2Adapter)
+    end
   end
 
   def load_schema
-    ActiveRecord::Base.silence do
+    begin
+      $stdout = StringIO.new
       ActiveRecord::Migration.verbose = false
       load File.join(FIXTURES_PATH, 'schema.rb')
+    ensure
+      $stdout = STDOUT
     end
   end
-  
+
+  def fix_primary_key(adapter_class)
+    if ActiveRecord::VERSION::STRING < "4.1"
+      adapter_class::NATIVE_DATABASE_TYPES[:primary_key] = "int(11) auto_increment PRIMARY KEY"
+    end
+  end
+
   module FixtureSetup
     def fixtures(*tables)
       table_names = tables.map { |t| t.to_s }

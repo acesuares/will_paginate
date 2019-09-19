@@ -1,24 +1,27 @@
+# encoding: utf-8
 require 'spec_helper'
 require 'active_support/rescuable' # needed for Ruby 1.9.1
 require 'action_controller'
+require 'action_view'
 require 'will_paginate/view_helpers/action_view'
 require 'will_paginate/collection'
 
 Routes = ActionDispatch::Routing::RouteSet.new
 
 Routes.draw do
-  match 'dummy/page/:page' => 'dummy#index'
-  match 'dummy/dots/page.:page' => 'dummy#dots'
-  match 'ibocorp(/:page)' => 'ibocorp#index',
+  get 'dummy/page/:page' => 'dummy#index'
+  get 'dummy/dots/page.:page' => 'dummy#dots'
+  get 'ibocorp(/:page)' => 'ibocorp#index',
         :constraints => { :page => /\d+/ }, :defaults => { :page => 1 }
 
-  match ':controller(/:action(/:id(.:format)))'
+  get ':controller(/:action(/:id(.:format)))'
 end
 
 describe WillPaginate::ActionView do
 
   before(:all) do
     I18n.load_path.concat WillPaginate::I18n.load_path
+    I18n.enforce_available_locales = false
   end
 
   before(:each) do
@@ -47,12 +50,23 @@ describe WillPaginate::ActionView do
     paginate do |pagination|
       assert_select 'a[href]', 3 do |elements|
         validate_page_numbers [2,3,2], elements
-        assert_select elements.last, ':last-child', "Next &#8594;"
+        text(elements[2]).should == 'Next →'
       end
-      assert_select 'span', 1
-      assert_select 'span.disabled:first-child', '&#8592; Previous'
+      assert_select 'span', 1 do |spans|
+        spans[0]['class'].should == 'previous_page disabled'
+        text(spans[0]).should == '← Previous'
+      end
       assert_select 'em.current', '1'
-      pagination.first.inner_text.should == '&#8592; Previous 1 2 3 Next &#8594;'
+      text(pagination[0]).should == '← Previous 1 2 3 Next →'
+    end
+  end
+
+  it "should override existing page param value" do
+    request.params :page => 1
+    paginate do |pagination|
+      assert_select 'a[href]', 3 do |elements|
+        validate_page_numbers [2,3,2], elements
+      end
     end
   end
 
@@ -65,15 +79,12 @@ describe WillPaginate::ActionView do
       assert_select 'a[href]', 4 do |elements|
         validate_page_numbers [1,1,3,3], elements
         # test rel attribute values:
-        assert_select elements[1], 'a', '1' do |link|
-          link.first['rel'].should == 'prev start'
-        end
-        assert_select elements.first, 'a', "Prev" do |link|
-          link.first['rel'].should == 'prev start'
-        end
-        assert_select elements.last, 'a', "Next" do |link|
-          link.first['rel'].should == 'next'
-        end
+        text(elements[0]).should == 'Prev'
+        elements[0]['rel'].should == 'prev'
+        text(elements[1]).should == '1'
+        elements[1]['rel'].should == 'prev'
+        text(elements[3]).should == 'Next'
+        elements[3]['rel'].should == 'next'
       end
       assert_select '.current', '2'
     end
@@ -116,8 +127,8 @@ describe WillPaginate::ActionView do
       <a href="/foo/bar?page=2" class="next_page" rel="next">Next &#8594;</a></div>
     HTML
     expected.strip!.gsub!(/\s{2,}/, ' ')
-    expected_dom = HTML::Document.new(expected).root
-    
+    expected_dom = parse_html_document(expected).root
+
     html_document.root.should == expected_dom
   end
   
@@ -127,7 +138,8 @@ describe WillPaginate::ActionView do
     
     assert_select 'a[href]', 1 do |links|
       query = links.first['href'].split('?', 2)[1]
-      query.split('&amp;').sort.should == %w(page=2 tag=%3Cbr%3E)
+      parts = query.gsub('&amp;', '&').split('&').sort
+      parts.should == %w(page=2 tag=%3Cbr%3E)
     end
   end
   
@@ -180,6 +192,22 @@ describe WillPaginate::ActionView do
     paginate
     assert_links_match /foo\[bar\]=baz/
   end
+
+  it "doesn't allow tampering with host, port, protocol" do
+    request.params :host => 'disney.com', :port => '99', :protocol => 'ftp'
+    paginate
+    assert_links_match %r{^/foo/bar}
+    assert_no_links_match /disney/
+    assert_no_links_match /99/
+    assert_no_links_match /ftp/
+  end
+
+  it "doesn't allow tampering with script_name" do
+    request.params :script_name => 'p0wned', :original_script_name => 'p0wned'
+    paginate
+    assert_links_match %r{^/foo/bar}
+    assert_no_links_match /p0wned/
+  end
   
   it "should not preserve parameters on POST" do
     request.post
@@ -229,7 +257,7 @@ describe WillPaginate::ActionView do
   end
 
   it "should paginate with custom route page parameter" do
-    request.symbolized_path_parameters.update :controller => 'dummy', :action => nil
+    request.symbolized_path_parameters.update :controller => 'dummy', :action => 'index'
     paginate :per_page => 2 do
       assert_select 'a[href]', 6 do |links|
         assert_links_match %r{/page/(\d+)$}, links, [2, 3, 4, 5, 6, 2]
@@ -247,7 +275,7 @@ describe WillPaginate::ActionView do
   end
 
   it "should paginate with custom route and first page number implicit" do
-    request.symbolized_path_parameters.update :controller => 'ibocorp', :action => nil
+    request.symbolized_path_parameters.update :controller => 'ibocorp', :action => 'index'
     paginate :page => 2, :per_page => 2 do
       assert_select 'a[href]', 7 do |links|
         assert_links_match %r{/ibocorp(?:/(\d+))?$}, links, [nil, nil, 3, 4, 5, 6, 3]
@@ -294,13 +322,12 @@ describe WillPaginate::ActionView do
   end
 
   it "renders using ActionView helpers on a custom object" do
-    helper = Object.new
-    class << helper
+    helper = Class.new {
       attr_reader :controller
       include ActionView::Helpers::UrlHelper
       include Routes.url_helpers
       include WillPaginate::ActionView
-    end
+    }.new
     helper.default_url_options[:controller] = 'dummy'
 
     collection = WillPaginate::Collection.new(2, 1, 3)
@@ -313,22 +340,21 @@ describe WillPaginate::ActionView do
   end
 
   it "renders using ActionDispatch helper on a custom object" do
-    helper = Object.new
-    class << helper
+    helper = Class.new {
       include ActionDispatch::Routing::UrlFor
       include Routes.url_helpers
       include WillPaginate::ActionView
-    end
-    helper.default_url_options[:host] = 'example.com'
-    helper.default_url_options[:controller] = 'dummy'
-    # helper.default_url_options[:only_path] = true
+    }.new
+    helper.default_url_options.update \
+      :only_path => true,
+      :controller => 'dummy'
 
     collection = WillPaginate::Collection.new(2, 1, 3)
     @render_output = helper.will_paginate(collection)
 
     assert_select 'a[href]', 4 do |links|
       urls = links.map {|l| l['href'] }.uniq
-      urls.should == ['http://example.com/dummy/page/1', 'http://example.com/dummy/page/3']
+      urls.should == ['/dummy/page/1', '/dummy/page/3']
     end
   end
 
@@ -337,6 +363,11 @@ describe WillPaginate::ActionView do
   def translation(data)
     I18n.available_locales # triggers loading existing translations
     I18n.backend.store_translations(:en, data)
+  end
+
+  # Normalizes differences between HTML::Document and Nokogiri::HTML
+  def text(node)
+    node.inner_text.gsub('&#8594;', '→').gsub('&#8592;', '←')
   end
 end
 
@@ -359,7 +390,7 @@ class DummyController
   include Routes.url_helpers
   
   def initialize
-    @request = DummyRequest.new
+    @request = DummyRequest.new(self)
   end
 
   def params
@@ -380,13 +411,19 @@ end
 
 class DummyRequest
   attr_accessor :symbolized_path_parameters
+  alias :path_parameters :symbolized_path_parameters
   
-  def initialize
+  def initialize(controller)
+    @controller = controller
     @get = true
-    @params = {}
+    @params = {}.with_indifferent_access
     @symbolized_path_parameters = { :controller => 'foo', :action => 'bar' }
   end
-  
+
+  def routes
+    @controller._routes
+  end
+
   def get?
     @get
   end
@@ -405,7 +442,11 @@ class DummyRequest
 
   def params(more = nil)
     @params.update(more) if more
-    @params
+    if defined?(ActionController::Parameters)
+      ActionController::Parameters.new(@params)
+    else
+      @params
+    end
   end
   
   def host_with_port
@@ -420,4 +461,8 @@ class DummyRequest
   def protocol
     'http:'
   end
+end
+
+if defined?(ActionController::Parameters)
+  ActionController::Parameters.permit_all_parameters = false
 end

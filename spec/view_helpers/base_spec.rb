@@ -10,6 +10,7 @@ describe WillPaginate::ViewHelpers do
   before(:all) do
     # make sure default translations aren't loaded
     I18n.load_path.clear
+    I18n.enforce_available_locales = false
   end
 
   before(:each) do
@@ -31,6 +32,18 @@ describe WillPaginate::ViewHelpers do
     it "should return nil for single-page collections" do
       collection = mock 'Collection', :total_pages => 1
       will_paginate(collection).should be_nil
+    end
+
+    it "should call html_safe on result" do
+      collection = WillPaginate::Collection.new(1, 2, 4)
+
+      html = mock 'HTML'
+      html.expects(:html_safe).returns(html)
+      renderer = mock 'Renderer'
+      renderer.stubs(:prepare)
+      renderer.expects(:to_html).returns(html)
+
+      will_paginate(collection, :renderer => renderer).should eql(html)
     end
   end
 

@@ -24,7 +24,7 @@ module WillPaginate
       # method as you see fit.
       def to_html
         html = pagination.map do |item|
-          item.is_a?(Fixnum) ?
+          item.is_a?(Integer) ?
             page_number(item) :
             send(item)
         end.join(@options[:link_separator])
@@ -41,10 +41,10 @@ module WillPaginate
     protected
     
       def page_number(page)
-        unless page == current_page
-          link(page, page, :rel => rel_value(page))
-        else
+        if page == current_page
           tag(:em, page, :class => 'current')
+        else
+          link(page, page, :rel => rel_value(page))
         end
       end
       
@@ -59,7 +59,7 @@ module WillPaginate
       end
       
       def next_page
-        num = @collection.current_page < @collection.total_pages && @collection.current_page + 1
+        num = @collection.current_page < total_pages && @collection.current_page + 1
         previous_or_next_page(num, @options[:next_label], 'next_page')
       end
       
@@ -88,7 +88,7 @@ module WillPaginate
       end
 
       def link(text, target, attributes = {})
-        if target.is_a? Fixnum
+        if target.is_a?(Integer)
           attributes[:rel] = rel_value(target)
           target = url(target)
         end
@@ -111,18 +111,18 @@ module WillPaginate
 
       def rel_value(page)
         case page
-        when @collection.current_page - 1; 'prev' + (page == 1 ? ' start' : '')
+        when @collection.current_page - 1; 'prev'
         when @collection.current_page + 1; 'next'
-        when 1; 'start'
         end
       end
 
-      def symbolized_update(target, other)
-        other.each do |key, value|
+      def symbolized_update(target, other, blacklist = nil)
+        other.each_pair do |key, value|
           key = key.to_sym
           existing = target[key]
-          
-          if value.is_a?(Hash) and (existing.is_a?(Hash) or existing.nil?)
+          next if blacklist && blacklist.include?(key)
+
+          if value.respond_to?(:each_pair) and (existing.is_a?(Hash) or existing.nil?)
             symbolized_update(existing || (target[key] = {}), value)
           else
             target[key] = value

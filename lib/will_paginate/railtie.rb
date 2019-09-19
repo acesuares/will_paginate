@@ -18,8 +18,6 @@ module WillPaginate
         require 'will_paginate/view_helpers/action_view'
       end
 
-      self.class.add_locale_path config
-
       # early access to ViewHelpers.pagination_options
       require 'will_paginate/view_helpers'
     end
@@ -31,20 +29,24 @@ module WillPaginate
       ActionController::Base.extend ControllerRescuePatch
     end
 
-    def self.add_locale_path(config)
-      config.i18n.railties_load_path.unshift(*WillPaginate::I18n.load_path)
-    end
-
     # Extending the exception handler middleware so it properly detects
     # WillPaginate::InvalidPage regardless of it being a tag module.
     module ShowExceptionsPatch
       extend ActiveSupport::Concern
-      included { alias_method_chain :status_code, :paginate }
-      private
+      included do
+        alias_method :status_code_without_paginate, :status_code
+        alias_method :status_code, :status_code_with_paginate
+      end
       def status_code_with_paginate(exception = @exception)
-        if exception.is_a?(WillPaginate::InvalidPage) or
-            (exception.respond_to?(:original_exception) &&
-              exception.original_exception.is_a?(WillPaginate::InvalidPage))
+        actual_exception = if exception.respond_to?(:cause)
+          exception.cause
+        elsif exception.respond_to?(:original_exception)
+          exception.original_exception
+        else
+          exception
+        end
+
+        if actual_exception.is_a?(WillPaginate::InvalidPage)
           Rack::Utils.status_code(:not_found)
         else
           original_method = method(:status_code_without_paginate)
@@ -66,4 +68,8 @@ module WillPaginate
       end
     end
   end
+end
+
+ActiveSupport.on_load :i18n do
+  I18n.load_path.concat(WillPaginate::I18n.load_path)
 end

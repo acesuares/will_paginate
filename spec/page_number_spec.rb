@@ -3,23 +3,41 @@ require 'will_paginate/page_number'
 
 describe WillPaginate::PageNumber do
   describe "valid" do
-    subject { described_class.new('12', 'page') }
+    def num
+      WillPaginate::PageNumber.new('12', 'page')
+    end
 
-    it { should eq(12) }
-    its(:inspect) { should eq('page 12') }
-    it { should be_a(WillPaginate::PageNumber) }
-    it { should be_instance_of(WillPaginate::PageNumber) }
-    it { should be_a(Numeric) }
-    it { should be_a(Fixnum) }
-    it { should_not be_instance_of(Fixnum) }
+    it "== 12" do
+      num.should eq(12)
+    end
+
+    it "inspects to 'page 12'" do
+      num.inspect.should eq('page 12')
+    end
+
+    it "is a PageNumber" do
+      (num.instance_of? WillPaginate::PageNumber).should be
+    end
+
+    it "is a kind of Numeric" do
+      (num.is_a? Numeric).should be
+    end
+
+    it "is a kind of Integer" do
+      (num.is_a? Integer).should be
+    end
+
+    it "isn't directly a Integer" do
+      (num.instance_of? Integer).should_not be
+    end
 
     it "passes the PageNumber=== type check" do |variable|
-      (WillPaginate::PageNumber === subject).should be
+      (WillPaginate::PageNumber === num).should be
     end
 
     it "passes the Numeric=== type check" do |variable|
-      (Numeric === subject).should be
-      (Fixnum === subject).should be
+      (Numeric === num).should be
+      (Integer === num).should be
     end
   end
 
